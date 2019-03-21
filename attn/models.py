@@ -68,25 +68,93 @@ class AttentionDecoder(nn.Module):
 
 class CNN(nn.Module):
 
-    def __init__(self, imgH, nc, nh):
+    def __init__(self, imgH, nc, nh, rcnn_depth=1):
         super(CNN, self).__init__()
         assert imgH % 16 == 0, 'imgH has to be a multiple of 16'
 
-        self.cnn = nn.Sequential(
-                      nn.Conv2d(nc, 64, 3, 1, 1), nn.ReLU(True), nn.MaxPool2d(2, 2), # 64x16x50
-                      nn.Conv2d(64, 128, 3, 1, 1), nn.ReLU(True), nn.MaxPool2d(2, 2), # 128x8x25
-                      nn.Conv2d(128, 256, 3, 1, 1), nn.BatchNorm2d(256), nn.ReLU(True), # 256x8x25
-                      nn.Conv2d(256, 256, 3, 1, 1), nn.ReLU(True), nn.MaxPool2d((2,2), (2,1), (0,1)), # 256x4x25
-                      nn.Conv2d(256, 512, 3, 1, 1), nn.BatchNorm2d(512), nn.ReLU(True), # 512x4x25
-                      nn.Conv2d(512, 512, 3, 1, 1), nn.ReLU(True), nn.MaxPool2d((2,2), (2,1), (0,1)), # 512x2x25
-                      nn.Conv2d(512, 512, 2, 1, 0), nn.BatchNorm2d(512), nn.ReLU(True)) # 512x1x25
+        self.rcnn_depth = rcnn_depth # depth of recursive CNN
+
+        self.cnn_pool_1 = nn.Sequential(
+            nn.Conv2d(nc, 64, 3, padding=1),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2)
+        ) # 64 x 16 x 50
+    
+        self.cnn1_tied = nn.Sequential(
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.ReLU(True)
+        ) # 64 x 16 x 50
+        
+        self.cnn_pool_2 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1),
+            nn.ReLU(True),
+            nn.MaxPool2d(2, 2)
+        ) # 128 x 8 x 25
+        
+        self.cnn2_tied = nn.Sequential(
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.ReLU(inplace=True)
+        ) # 128 x 8 x 25
+        
+        self.cnn_pool_3 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(True),
+            nn.MaxPool2d((2, 2), (2, 1), (0, 1))
+        ) # 256 x 4 x 25
+        
+        self.cnn3_tied = nn.Sequential(
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.ReLU(True)
+        ) # 256 x 4 x 25
+        
+        self.cnn_pool_4 = nn.Sequential(
+            nn.Conv2d(256, 512, 3, padding=1),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True),
+            nn.MaxPool2d((2,2), (2,1), (0,1))
+        ) # 256 x 2 x 25
+        
+        self.cnn4_tied = nn.Sequential(
+            nn.Conv2d(512, 512, 3, padding=1),
+            nn.ReLU(True)
+        ) # 512 x 2 x 25
+
+        self.cnn_last = nn.Sequential(
+            nn.Conv2d(512, 512, 2),
+            nn.BatchNorm2d(512),
+            nn.ReLU(True)
+        ) # 512 x 1 x 25
+
         self.rnn = nn.Sequential(
             BidirectionalLSTM(512, nh, nh),
-            BidirectionalLSTM(nh, nh, nh))
+            BidirectionalLSTM(nh, nh, nh)
+        )
 
     def forward(self, input):
-        # conv features
-        conv = self.cnn(input)
+        # Block 1
+        conv = self.cnn_pool_1(input)
+
+        for _ in range(self.rcnn_depth):
+            conv = self.cnn1_tied(conv)
+        # Block 2
+        conv = self.cnn_pool_2(conv)
+
+        for _ in range(self.rcnn_depth):
+            conv = self.cnn2_tied(conv)
+        # Block 3
+        conv = self.cnn_pool_3(conv)
+
+        for _ in range(self.rcnn_depth):
+            conv = self.cnn3_tied(conv)
+        # Block 4
+        conv = self.cnn_pool_4(conv)
+
+        for _ in range(self.rcnn_depth):
+            conv = self.cnn4_tied(conv)
+            
+        conv = self.cnn_last(conv)
+
         b, c, h, w = conv.size()
         assert h == 1, "the height of conv must be 1"
         conv = conv.squeeze(2)
